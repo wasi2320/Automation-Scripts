@@ -1,0 +1,168 @@
+pipeline {
+    agent any
+
+    environment {
+        BUILD_TAG = "build-${env.BUILD_NUMBER}"
+    }
+    
+    
+    stages {
+        
+           
+        stage('Cloning our Git') {
+            steps {
+                git branch: 'feat/24A-release', credentialsId: 'codecommit', url: ''
+            }
+        }
+
+        stage('AWS Operations') {
+            steps {
+                script {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'jenkins-creds',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+                        sh "aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin amazonaws.com"
+                        
+                    }
+                }
+            }
+        }
+
+        stage('Copy Environment File') {
+            steps {
+                sh """
+                rsync -avz /var/lib/jenkins/workspace/configurations/ETS/client-prod/backend/etsbackendenv Backend/.env
+                rsync -avz /var/lib/jenkins/workspace/configurations/ETS/client-prod/UI/UIenv UI/.env
+                rsync -avz /var/lib/jenkins/workspace/configurations/ETS/client-prod/crons/cronenv Crons/.env
+                rsync -avz /var/lib/jenkins/workspace/configurations/ETS/client-prod/report/reportenv Reports/.env
+                sed -i 's|process.env.REACT_APP_SERVER_URL|"https://ets-client-prod.domain.io"|g' UI/GS-ETS/src/config.tsx
+                sed -i 's|process.env.REACT_APP_REPORT_URL|"https://ets-client-prod.domain.io"|g' UI/GS-ETS/src/config.tsx
+
+                """
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                sh """
+                cd Backend;
+                more .env
+                docker build -f Dockerfile.linode -t ets-staging-backend --target prod .;
+                docker tag ets-staging-backend:latest account_id.dkr.ecr.us-east-1.amazonaws.com/ets-backend-prod:${BUILD_TAG} ;
+                docker push account_id.dkr.ecr.us-east-1.amazonaws.com/ets-backend-prod:${BUILD_TAG};
+                docker rmi ets-staging-backend:latest account_id.dkr.ecr.us-east-1.amazonaws.com/ets-backend-prod:${BUILD_TAG}
+                cd ../Crons;
+                docker build  -t ets-staging-crons .;
+                docker tag ets-staging-crons:latest account_id.dkr.ecr.us-east-1.amazonaws.com/ets-crons-prod:${BUILD_TAG};
+                docker push account_id.dkr.ecr.us-east-1.amazonaws.com/ets-crons-prod:${BUILD_TAG};
+                docker rmi ets-staging-crons:latest account_id.dkr.ecr.us-east-1.amazonaws.com/ets-crons-prod:${BUILD_TAG};
+                cd ../Reports
+                docker build -t ets-report .;
+                docker tag ets-report:latest account_id.dkr.ecr.us-east-1.amazonaws.com/ets-reports-prod:${BUILD_TAG};
+                docker push account_id.dkr.ecr.us-east-1.amazonaws.com/ets-reports-prod:${BUILD_TAG};
+                docker rmi ets-report:latest account_id.dkr.ecr.us-east-1.amazonaws.com/ets-reports-prod:${BUILD_TAG};
+                 cd ../UI/GS-ETS/;
+                docker build -t ets-staging-ui .;
+                docker tag ets-staging-ui:latest account_id.dkr.ecr.us-east-1.amazonaws.com/ets-ui-prod:${BUILD_TAG};
+                docker push account_id.dkr.ecr.us-east-1.amazonaws.com/ets-ui-prod:${BUILD_TAG};
+                docker rmi ets-staging-ui:latest account_id.dkr.ecr.us-east-1.amazonaws.com/ets-ui-prod:${BUILD_TAG};
+                
+                """
+            }
+        }
+
+      stage('Cloning Logger Repo Git') {
+            steps {
+                git branch: 'feat/docker', credentialsId: 'codecommit', url: 'https://git-codecommit.us-east-2.amazonaws.com/v1/repos/logging-service'
+            }
+        }
+          stage('Deploy Logger') {
+            steps {
+                sh """
+                rsync -avz /var/lib/jenkins/workspace/configurations/ETS/client-prod/logging/loggingenv .env
+                docker build -t ets-logger --target production .;
+                docker tag ets-logger:latest account_id.dkr.ecr.us-east-1.amazonaws.com/ets-logger-prod:${BUILD_TAG} ;
+                docker push account_id.dkr.ecr.us-east-1.amazonaws.com/ets-logger-prod:${BUILD_TAG};
+                docker rmi ets-logger:latest account_id.dkr.ecr.us-east-1.amazonaws.com/ets-logger-prod:${BUILD_TAG} ;
+                """
+            }
+        }
+
+
+                
+ stage('Cloning and Updating ArgoCD-gitops') {
+            steps {
+                dir('/var/lib/jenkins/workspace/argocd') {
+                git changelog: false, credentialsId: 'codecommit', poll: false, url: 'https://git-codecommit.us-east-2.amazonaws.com/v1/repos/gitops-argocd'
+                sh """
+                cd ./Prod
+                
+                
+                
+                sed -i 's|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-backend-prod:.*|.dkr.ecr.us-east-1.amazonaws.com/ets-backend-prod:${BUILD_TAG}|' ./backend-manifest.yml
+                sed -i 's|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-crons-prod:.*|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-crons-prod:${BUILD_TAG}|' ./cron-manifest.yml
+                sed -i 's|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-reports-prod:.*|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-reports-prod:${BUILD_TAG}|' ./cron-manifest.yml
+                sed -i 's|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-ui-prod:.*|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-ui-prod:${BUILD_TAG}|' ./ui-manifest.yml
+                sed -i 's|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-reports-prod:.*|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-reports-prod:${BUILD_TAG}|' ./reporting-server-manifest.yml
+                sed -i 's|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-logger-prod:.*|account_id.dkr.ecr.us-east-1.amazonaws.com/ets-logger-prod:${BUILD_TAG}|' ./logger-manifest.yml
+
+              
+                """
+            }
+        }
+    }
+        
+            stage('Update GIT') {
+  steps {
+    script { 
+        dir('/var/lib/jenkins/workspace/ETS-Prod/argocd') {
+      catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+        withCredentials([usernamePassword(credentialsId: 'codecommit', passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
+            def encodedPassword = URLEncoder.encode("$GIT_PASSWORD",'UTF-8')
+            sh """
+                 git config --global user.email "jenkins@domain.io"
+                git config --global user.name "Jenkins"
+                git add .
+                git commit -m 'Triggered Build: ${BUILD_TAG}'
+            if git remote | grep -q codecommit; then
+                echo "Remote 'codecommit' already exists. Updating URL..."
+                git remote set-url codecommit https://gitops-argocd
+            else
+                echo "Adding remote 'codecommit'..."
+                git remote add codecommit https://gitops-argocd
+            fi
+                git push codecommit
+                """
+        }
+}
+        }
+    }
+  }
+            }
+    }
+     post {
+    success {
+        script {
+
+            def buildCause = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+            def userId = buildCause ? buildCause[0].userId : 'unknown'
+            sh """
+            curl -X POST -H 'Content-Type: application/json' -d '{\"text\": \"SUCCESS: Job ${env.JOB_NAME} [${env.BUILD_NUMBER}] triggered by ${userId} has successfully completed. Please check the console output at: http://jenkins.domain.io/job/${env.JOB_NAME}/${env.BUILD_NUMBER}/ for more details.\"}' 'https://chat.googleapis.com/v1/spaces/AAAAUQlmOIs/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=EC5_xXnKnUDlVb4ZhtgbAKWLefr4SYZVmkqRW7rEShI'
+            """
+        }
+    }
+    failure {
+        script {
+            
+            def buildCause = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+            def userId = buildCause ? buildCause[0].userId : 'unknown'
+            sh """
+            curl -X POST -H 'Content-Type: application/json' -d '{\"text\": \"FAILURE: Job ${env.JOB_NAME} [${env.BUILD_NUMBER}] triggered by ${userId} has Failed. Please check the console output at: http://jenkins.domain.io/job/${env.JOB_NAME}/${env.BUILD_NUMBER}/ for more details.\"}' 'https://chat.googleapis.com/v1/spaces/AAAAUQlmOIs/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=EC5_xXnKnUDlVb4ZhtgbAKWLefr4SYZVmkqRW7rEShI'
+            """
+        }
+    }
+}
+}

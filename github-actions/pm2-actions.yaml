@@ -1,0 +1,42 @@
+name: Coin Official AWS
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+
+    runs-on: self-hosted
+
+    strategy:
+      matrix:
+        node-version: [18.x]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    - name: "make config directory"
+      run: touch .env
+    - name: environment
+      run: |
+        echo "NODE_ENV=${{ secrets.PORT }}" > .env && \
+        echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" >> .env && \
+        echo "RPC_PROVIDER=${{ secrets.RPC_PROVIDER }}" >> .env && \
+        echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> .env && \
+        echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> .env && \
+        echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> .env && \
+        echo "AWS_S3_BUCKET=${{ secrets.AWS_S3_BUCKET }}" >> .env && \
+        echo "ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}" >> .env && \
+        echo "DEX_TOOLS_API_KEY=${{ secrets.DEX_TOOLS_API_KEY }}" >> .env && \
+        echo "MORALIS_API_KEY='${{ secrets.MORALIS_API_KEY }}'" >> .env && \
+        echo "NEXT_PUBLIC_PROJECT_ID='${{ secrets.NEXT_PUBLIC_PROJECT_ID }}'" >> .env
+    - run: npm i
+    - run: npm i -g pm2
+    - run: pm2 delete coin-official || true
+    - run: pm2 start pm2.sh --name coin-official

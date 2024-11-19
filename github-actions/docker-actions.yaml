@@ -1,0 +1,43 @@
+name: Node.js CI
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    strategy:
+      matrix:
+        node-version: [18.x]
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    - name: "make config directory"
+      run: touch .env
+    - name: environment
+      run: |
+        echo "PORT=${{secrets.PORT}}" >> .env
+        echo "MONGODB_URI=${{secrets.MONGODB_URI}}" >> .env
+        echo "SEND_GRID_KEY=${{secrets.SEND_GRID_KEY}}" >> .env
+        echo "ALCHEMY_API_KEY=${{secrets.ALCHEMY_API_KEY}}" >> .env
+        echo "ETHERSCAN_API_KEY=${{secrets.ETHERSCAN_API_KEY}}" >> .env
+        echo "MORALIS_API_KEY=${{secrets.MORALIS_API_KEY}}" >> .env         
+        echo "MAX_PRICE_TOKEN=${{secrets.MAX_PRICE_TOKEN}}" >> .env
+        echo "ZERION_API_KEY=${{secrets.ZERION_API_KEY}}" >> .env 
+        echo "SHYFT_API_KEY=${{secrets.SHYFT_API_KEY}}" >> .env
+        echo "VEZGO_CLIENT_SECRET=${{secrets.VEZGO_CLIENT_SECRET}}" >> .env
+        echo "VEZGO_CLIENT_ID=${{secrets.VEZGO_CLIENT_ID}}" >> .env
+        echo "COINGECKO_KEY=${{secrets.COINGECKO_KEY}}" >> .env
+        echo "JWT_SECRET=${{secrets.JWT_SECRET}}" >> .env
+        echo "RECAPTCHA_SECRET_KEY=${{secrets.RECAPTCHA_SECRET_KEY}}" >> .env
+    - run: docker rm -f backend
+    - run: docker rmi backend
+    - run: docker build -t backend:latest .
+    - run: docker run --name backend -d -p 3000:3000 backend 
